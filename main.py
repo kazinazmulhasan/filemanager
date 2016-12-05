@@ -2,6 +2,9 @@ from tkinter import *
 import os
 import string
 import re
+from shutil import copyfile
+
+panel_count = 8
 
 class Application(Frame):
 	def __init__(self, master=None):
@@ -13,7 +16,7 @@ class Application(Frame):
 		self.load_images()
 		self.add_menu()
 		self.add_console()
-		self.add_browse_panels(5)
+		self.add_browse_panels(panel_count)
 		self.load_drives()
 	
 	def load_images(self):
@@ -39,8 +42,8 @@ class Application(Frame):
 		self.menu_images = []
 		self.add_menu_button("add_file", self.add_file_callback)
 		self.add_menu_button("add_folder", self.add_folder_callback)
-		self.add_menu_button("rename", self.rename_callback)
-		self.add_menu_button("cut", self.cut_callback)
+		# self.add_menu_button("rename", self.rename_callback)
+		# self.add_menu_button("cut", self.cut_callback)
 		self.add_menu_button("copy", self.copy_callback)
 		self.add_menu_button("paste", self.paste_callback)
 		self.add_menu_button("delete", self.delete_callback)
@@ -55,20 +58,41 @@ class Application(Frame):
 		self.console.insert(0, "mkdir ")
 		self.console.focus()
 	
+	def get_selected_item(self):
+		panel = self.panels[self.curr_pid]
+		name = panel.get(panel.curselection()[0])
+		if name[-1:] == "/":
+			name = name[:-1]
+		return name
+	
 	def rename_callback(self):
-		pass
+		self.console.delete(0, "end")
+		self.console.insert(0, "rename '%s' '%s' " % (self.panels[self.curr_pid].addr, self.get_selected_item()))
+		self.console.focus()
 	
 	def cut_callback(self):
 		pass
 	
 	def copy_callback(self):
-		pass
+		self.clipboard = [self.panels[self.curr_pid].addr, self.get_selected_item()]
 	
 	def paste_callback(self):
-		pass
+		if self.clipboard != "":
+			panel = self.panels[self.curr_pid]
+			dst = panel.addr+self.clipboard[1]
+			copyfile(self.clipboard[0]+self.clipboard[1], dst)
+			self.panel_refresh(panel)
+			
 	
 	def delete_callback(self):
-		print()
+		panel = self.panels[self.curr_pid]
+		name = self.get_selected_item()
+		if name[-1:]=="/":
+			name = name[:-1]
+			os.rmdir("%s%s" % (panel.addr, name))
+		else:
+			os.remove("%s%s" % (panel.addr, name))
+		self.panel_refresh(panel)
 	
 	def add_menu_button(self, name, callback):
 		button = Button(self.menu, image=self.images[name], command=callback)
@@ -82,18 +106,21 @@ class Application(Frame):
 	
 	def add_browse_panels(self, count):
 		self.panels = []
-		width = int(self.width/(count*10))
-		print(width)
+		self.panel_width = int(self.width/(count*10))
 		for i in range(count):
-			panel = Listbox(self, bg=self.panel_colors[i%2], bd=1, height=self.height["panel"], width=width, selectmode=SINGLE, font=("Monaco", 12))
-			panel.pid = i
-			panel.addr = ""
-			panel.bind("<Double-Button-1>", self.open)
-			panel.bind("<Button-3>", self.clear_selection)
-			panel.bind("<FocusIn>", self.set_curr_panel)
-			panel.pack(side=LEFT)
-			self.panels.append(panel)
+			self.add_panel(i, "")
 		self.curr_pid = 0
+	
+	def add_panel(self, pid, path):
+		panel = Listbox(self, bg=self.panel_colors[pid%2], bd=1, height=self.height["panel"], width=self.panel_width, selectmode=SINGLE, font=("Monaco", 12))
+		panel.pid = pid
+		panel.addr = path
+		panel.bind("<Double-Button-1>", self.open)
+		panel.bind("<Button-3>", self.clear_selection)
+		panel.bind("<FocusIn>", self.set_curr_panel)
+		panel.bind("<Escape>", self.panel_close)
+		panel.pack(side=LEFT)
+		self.panels.append(panel)
 	
 	def open(self, event):
 		widget = event.widget
@@ -107,25 +134,45 @@ class Application(Frame):
 	def panel_load(self, pid, path):
 		if pid < len(self.panels):
 			panel = self.panels[pid]
-			panel.addr = path
 			for i in range(pid, len(self.panels)):
 				self.empty(self.panels[i])
-			for item in os.scandir(path):
-				if item.is_dir():
-					panel.insert(END, item.name+"/")
-				else:
-					panel.insert(END, item.name)
-			panel.focus()
+				panel.addr = path
 		else:
-			pass
+			for panel in self.panels[0:len(self.panels)-panel_count+1]:
+				self.hide(panel)
+			self.add_panel(pid, path)
+			print("new panel added")
+		for item in os.scandir(path):
+			if item.is_dir():
+				panel.insert(END, item.name+"/")
+			else:
+				panel.insert(END, item.name)
+		panel.focus()
 	
 	def panel_refresh(self, panel):
+		if panel.addr == "":
+			return
 		self.empty(panel)
 		for item in os.scandir(panel.addr):
 			if item.is_dir():
 				panel.insert(END, item.name+"/")
 			else:
 				panel.insert(END, item.name)
+	
+	def panel_close(self, event):
+		# print(dir(event))
+		# return
+		widget = event.widget
+		if widget.pid == len(self.panels)-1 and widget.pid >= panel_count:
+			print("closing panel")
+			self.empty(widget)
+			for panel in self.panels:
+				panel.pack_forget()
+			widget.destroy()
+			self.panels.pop()
+			for panel in self.panels[(panel_count*-1)-1:]:
+				panel.pack(side=LEFT)
+			self.panels[0].delete(self.panels[0].count, END)
 	
 	def clear_selection(self, event):
 		event.widget.selection_clear(0, END)
@@ -136,13 +183,16 @@ class Application(Frame):
 	
 	def load_drives(self):
 		self.panels[0].addr = ""
+		count = 0
 		letters = list(map(chr, range(65, 91)))
 		for letter in letters:
 			try:
 				if os.path.exists("%s:" % letter):
 					self.show_item(self.panels[0], letter+":/", "drive")
+					count += 1
 			except Exception as e:
 				pass
+		self.panels[0].count = count
 	
 	def show_item(self, panel, name, type):
 		panel.insert(END, name)
@@ -166,8 +216,13 @@ class Application(Frame):
 			self.add_file(self.panels[self.curr_pid], text)
 		elif text[0]=="mkdir":
 			# print("adding folders")
+			text.pop(0)
 			self.add_folder(self.panels[self.curr_pid], text)
-			
+		elif text[0]=="rename":
+			try:
+				self.rename(text[1], text[2], text[3])
+			except Exception as e:
+				print(e)
 		widget.delete(0, "end")
 	
 	def add_file(self, parent, names):
@@ -188,6 +243,12 @@ class Application(Frame):
 				except:
 					pass
 			self.panel_refresh(parent)
+	
+	def rename(self, cwd, old_name, new_name):
+		# os.chdir(cwd)
+		# os.replace(old_name, new_name, cwd, cwd)
+		os.system("ren %s%s %s%s" % (cwd[:-1], old_name[1:], cwd[:-1], new_name[1:]) )
+		self.panel_refresh(self.panels[self.curr_pid])
 
 root = Tk()
 root.wm_title("Oxiago File Manager")
